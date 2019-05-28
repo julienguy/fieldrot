@@ -104,24 +104,26 @@ def field_radius_in_deg(hacen,deccen,ha1,dec1) :
     y1 =(dec1-deccen)
     return np.sqrt((x1**2+y1**2))
     
-# measure the rotation angle when going from (ha1,dec1 to ha2,dec2)
-# angle is positive for counterclockwise rotation
-def field_rotation_angle_in_rad(ha1,dec1,ha2,dec2,dx=0,dy=0) :
-    
-    x1,y1=hadec2xy(ha1,dec1,ha1[0],dec1[0])
-    x2,y2=hadec2xy(ha2,dec2,ha2[0],dec2[0])
-    x1 -= np.mean(x1)
-    y1 -= np.mean(y1)
-    x2 -= np.mean(x2)
-    y2 -= np.mean(y2)
-    y2 += dy
-    x2 += dx
-    return np.arcsin((x1*y2-x2*y1)/np.sqrt((x1**2+y1**2)*(x2**2+y2**2)))
 
-# measure the rotation angle when going from (ha1,dec1 to ha2,dec2)
-# angle is positive for counterclockwise rotation
-def field_rotation_angle_in_rad(ha1,dec1,ha2,dec2,dx=0,dy=0) :
-    
+def measure_field_rotation(ha1,dec1,ha2,dec2,dx=0,dy=0) :
+
+    """
+    measure the rotation angle when going from (ha1,dec1 to ha2,dec2)
+    Args :
+      ha1: hour angle in degrees of field center prior to rotation
+      dec1:  declination in degrees of field center prior to rotation
+      ha2: hour angle in degrees of field center after rotation
+      dec2:  declination in degrees of field center after rotation
+      dx: telescope boresight offset in degrees along ha
+      dy: telescope boresight offset in degrees along dec
+      
+    Returns:
+      angle in degrees of stars rotation with respect to instrument.
+      angle is increasing from X_tan to Y_tan,
+                   where X_tan is along HA and increases with HA (LST-RA),
+                   and Y_tan is along Dec and increases with Dec
+     (angle goes counterclock-wise if X_tan points to the right and Y_tan points to the top)
+    """
     
     x1,y1=hadec2xy(ha1,dec1,ha1[0],dec1[0])
     if dx==0 and dy==0 :
@@ -134,7 +136,7 @@ def field_rotation_angle_in_rad(ha1,dec1,ha2,dec2,dx=0,dy=0) :
     y1 -= np.mean(y1)
     x2 -= np.mean(x2)
     y2 -= np.mean(y2)
-    return np.arcsin((x1*y2-x2*y1)/np.sqrt((x1**2+y1**2)*(x2**2+y2**2)))
+    return np.arcsin((x1*y2-x2*y1)/np.sqrt((x1**2+y1**2)*(x2**2+y2**2)))/D2R
 
 def hadec2altaz(ha,dec,lat) : 
     cha  = np.cos(ha*D2R)
@@ -175,7 +177,7 @@ def altaz2hadec(alt,az,lat) :
     dec = np.arcsin(slat*salt+clat*calt*caz)/ D2R
     return ha,dec
 
-def field_rotation(ha,dec,ma=25/3600.,me=-103/3600.,lat=31.96403) :
+def predict_field_rotation(ha,dec,ma=25/3600.,me=-103/3600.,lat=31.96403) :
     """
     Field rotation prediction given field center and polar axis misalignment
 
@@ -230,7 +232,7 @@ def field_rotation(ha,dec,ma=25/3600.,me=-103/3600.,lat=31.96403) :
         # convert back to ha dec
         ha2,dec2   = altaz2hadec(alt,az,lat)
         # measure rotation
-        angle[i] = np.mean(field_rotation_angle_in_rad(ha1,dec1,ha2,dec2,0,0))/D2R
+        angle[i] = measure_field_rotation_angle_in_rad(ha1,dec1,ha2,dec2,0,0)
 
     if isinstance(ha,np.ndarray) :
         return angle
@@ -326,8 +328,8 @@ def main() :
         for cdec in np.linspace(0,80,10) :
             ha1,dec1 = xy2hadec(x1,y1,cha,cdec)
             ha2,dec2 = xy2hadec(x2,y2,cha,cdec)
-            angle = field_rotation_angle_in_rad(ha1,dec1,ha2,dec2)
-            print("dec=",cdec,"rotation angle result=",np.mean(angle/D2R),"expectation=",a/D2R)
+            angle = measure_field_rotation(ha1,dec1,ha2,dec2)
+            print("dec=",cdec,"rotation angle result=",np.mean(angle),"expectation=",a/D2R)
 
     #######################################################
     # testing rotation angle due to polar misalignment
@@ -363,8 +365,8 @@ def main() :
 
     ha1,dec1 = xy2hadec(x1,y1,cha,cdec)
     ha2,dec2 = rotation_hadec(ha1,dec1,drot)
-    angle    = field_rotation_angle_in_rad(ha1,dec1,ha2,dec2)
-    print("mean field rotation angle=",np.mean(angle)/D2R,"deg")
+    angle    = measure_field_rotation(ha1,dec1,ha2,dec2)
+    print("mean field rotation angle=",np.mean(angle),"deg")
     print("mean delta dec=",np.mean(dec2)-np.mean(dec1))
     print("mean delta ha=",np.mean(ha2)-np.mean(ha1))
     
@@ -421,8 +423,8 @@ def main() :
     dec3 = dec1 + signe*ddec
     x3,y3 = hadec2xy(ha3,dec3,cha,cdec)
     
-    angle    = field_rotation_angle_in_rad(ha1,dec1,ha3,dec3)
-    print("mean field rotation angle (other method, approximate)=",np.mean(angle)/D2R,"deg")
+    angle    = measure_field_rotation(ha1,dec1,ha3,dec3)
+    print("mean field rotation angle (other method, approximate)=",np.mean(angle),"deg")
     print("mean delta dec (other method, approximate)=",np.mean(dec3)-np.mean(dec1))
     print("mean delta ha (other method, approximate)=",np.mean(ha3)-np.mean(ha1))
     
