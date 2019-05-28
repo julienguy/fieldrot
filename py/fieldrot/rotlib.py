@@ -175,6 +175,67 @@ def altaz2hadec(alt,az,lat) :
     dec = np.arcsin(slat*salt+clat*calt*caz)/ D2R
     return ha,dec
 
+def field_rotation(ha,dec,ma=25/3600.,me=-103/3600.,lat=31.96403) :
+    """
+    Field rotation prediction given field center and polar axis misalignment
+
+    Args :
+      ha: hour angle in degrees of field center
+      dec:  declination in degrees of field center
+      me: degrees, in the northern hemisphere, positive ME means that the pole of the mounting is below the true (unrefracted) north (so elevation=latitude-me)
+      ma: degrees, in the northern hemisphere, and positive MA means that the pole of the mounting is to the right of due north
+      lat: degrees, latitude of telescope
+
+    Returns:
+      angle in degrees of stars rotation with respect to instrument.
+      angle is increasing from X_tan to Y_tan,
+                   where X_tan is along HA and increases with HA (LST-RA),
+                   and Y_tan is along Dec and increases with Dec
+     (angle goes counterclock-wise if X_tan points to the right and Y_tan points to the top)
+    """
+
+    # convert polar axis to HA and Dec
+    axis_ha,axis_dec=altaz2hadec(alt=lat-me,az=ma,lat=lat)
+
+    # now to theta phi
+    axis_theta,axis_phi = hadec2thetaphi(axis_ha,axis_dec)
+
+    # define a rotation matrix to move the polar axis to the north
+    # vector product
+    cross = np.cross(unit_vector(axis_theta,axis_phi),unit_vector(0,0))
+    norme = np.sqrt(np.sum(cross**2))
+    if norme > 0 :
+        drot = rotation_matrix(cross/norme,np.arcsin(norme))
+    else :
+        drot = np.eye(3)
+
+    # take a fiducial set of points in field of view
+    phi = np.linspace(0,2*np.pi,10)
+    x1  = np.cos(phi)
+    y1  = np.sin(phi)
+
+    aha   = np.atleast_1d(ha)
+    adec  = np.atleast_1d(dec)
+    angle = np.zeros(aha.shape)
+
+    for i in range(aha.size) :
+        # convert to ha and dec given the field center
+        ha1,dec1 = xy2hadec(x1,y1,aha[i],adec[i])
+        # rotate
+        ha2,dec2   = rotation_hadec(ha1,dec1,drot)
+        # convert to alt az
+        alt,az     = hadec2altaz(ha2,dec2,lat)
+        # apply refraction
+        alt += 79./3600.*np.tan(30.*D2R)/np.tan(alt*D2R)  # deg , refraction per point in field
+        # convert back to ha dec
+        ha2,dec2   = altaz2hadec(alt,az,lat)
+        # measure rotation
+        angle[i] = np.mean(field_rotation_angle_in_rad(ha1,dec1,ha2,dec2,0,0))/D2R
+
+    if isinstance(ha,np.ndarray) :
+        return angle
+    else :
+        return angle[0]
 
 #############################################################
 # TESTS
