@@ -276,10 +276,10 @@ for sample,ii in enumerate(configs ) :
                                     print("step",loop+1,dha,ddec)
 
                             # rotation angle, counterclockwise, due to polar misalignment, + boresight misalignment
-                            ptheta1[j]  = np.mean(field_rotation_angle_in_rad(ha1,dec1,ha2,dec2,0,0))/D2R ####
+                            ptheta1[j]  = np.mean(measure_field_rotation(ha1,dec1,ha2,dec2,0,0)) ####
 
                             if args.with_boresight_offset :
-                                ptheta[j]   = np.mean(field_rotation_angle_in_rad(ha1,dec1,ha2,dec2,bsdx,bsdy))/D2R ####
+                                ptheta[j]   = np.mean(measure_field_rotation(ha1,dec1,ha2,dec2,bsdx,bsdy)) ####
                             else :
                                 ptheta[j]   = ptheta1[j]
                                 
@@ -459,6 +459,34 @@ for sample,ii in enumerate(configs ) :
         #if args.fit_torque or args.fixed_torque : legend_title+=" a={:4.3f} b={:4.3f} deg".format(a,b)
         plt.legend(title=legend_title)
         plt.xlabel("HA (deg)")
+        if offset :
+            plt.ylabel("measured rotation angle on sky + offset ({})".format(unit))
+        else :
+            plt.ylabel("measured rotation angle on sky ({})".format(unit))
+        plt.grid()
+        fig.savefig(title+".png")
+        print("wrote",title+".png")
+
+
+    if 1 : # vs EXPID
+        title=filename.split(".")[0]+"-vs-expid"
+        fig=plt.figure(title)
+
+        
+        
+        plt.scatter(table["EXPID"][ii],(z-offset)*conversion,label=label,alpha=0.8)
+        plt.plot(table["EXPID"][ii],ptheta1*conversion,mstyle,c="red",label="polar misalignment + refraction")
+        if args.with_boresight_offset :
+            plt.plot(table["EXPID"][ii],ptheta*conversion,"v",c="green",label="polar misalignment + refraction + boresight offset")
+        if args.fit_torque or args.fixed_torque :
+            #plt.plot(table["EXPID"][ii],model,"-",label="FP torque")
+            label="polar misalignment + refraction + FP torque"
+            label+=" (a={:4.3f} b={:4.3f} deg)".format(a,b)
+            plt.plot(table["EXPID"][ii],(ptheta+model-offset)*conversion,mstyle,c='orange',label=label)
+        legend_title='with ME={:d}" MA={:d}"'.format(int(me),int(ma))
+        #if args.fit_torque or args.fixed_torque : legend_title+=" a={:4.3f} b={:4.3f} deg".format(a,b)
+        plt.legend(title=legend_title)
+        plt.xlabel("EXPID")
         if offset :
             plt.ylabel("measured rotation angle on sky + offset ({})".format(unit))
         else :
