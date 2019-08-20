@@ -15,7 +15,9 @@ parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFo
 parser.add_argument('-i','--infile', type = str, default = None, required = True, nargs="*", help = 'path to many ci-xxxxx_catalog.fits from Aaron')
 parser.add_argument('-r','--reffile', type = str, default = None, required = False, help = 'reference frame from this ci-xxxxx_catalog.fits, default is the first of the input series')
 parser.add_argument('-o','--outfile',type = str, default = None, required = True, help="output ascii file")
-parser.add_argument('--maxdist',type=float,default=5,required=False,help="max allowed separation between stars in match")
+parser.add_argument('--maxdist',type=float,default=1,required=False,help="max allowed separation between stars in match")
+parser.add_argument('--maxerr',type=float,default=0.3,required=False,help="max allowed uncertainty on position")
+parser.add_argument('--anchor-to-north',action = 'store_true')
 
 args = parser.parse_args()
 
@@ -118,8 +120,9 @@ print(filenames)
 ctx0=dict()
 cty0=dict()
 # pixel coordinates of first exposure (to discard stars on edges)
-x0=dict()
-y0=dict()
+cx0=dict()
+cy0=dict()
+flux0=dict()
 
 # transformation coeff to tangent plane
 T=dict()
@@ -150,7 +153,9 @@ if True :
     # (x,y) -> tx,ty = a*x+b*y+c	
     ra=cat['ra']
     ## HA = LST-RA !!!!
-    ha = np.mean(ra)-ra # sign flip is crutial here, offset has no effect
+    reference_lst = np.mean(ra) # this is just a reference to get consistent ha, the actual value does not matter
+    
+    ha = reference_lst-ra # sign flip is crutial here, offset has no effect
     
     dec=cat['dec']
     cha=[]
@@ -159,10 +164,10 @@ if True :
         ii=cat['camera']==cam
         cha.append(np.mean(ha[ii]))
         cdec.append(np.mean(dec[ii]))
-    cha=np.mean(cha)
-    cdec=np.mean(cdec)
-    tx,ty = hadec2xy(ha,dec,cha,cdec)
-        
+    reference_ha=np.mean(cha)
+    reference_dec=np.mean(cdec)
+    tx,ty = hadec2xy(ha,dec,reference_ha,reference_dec)
+    
     for cam in cameras :
         ii=(cat['camera']==cam)&(cat['dxcentroid']>0)&(cat['dycentroid']>0)&(cat['dxcentroid']<0.5)&(cat['dycentroid']<0.5)&(cat['sig_major_pix']>2)
         x=cat['xcentroid'][ii]
@@ -171,9 +176,7 @@ if True :
         ye=cat['dycentroid'][ii]
         ttx=tx[ii]
         tty=ty[ii]
-
-        print(cam,"tx=",np.mean(ttx),"ty=",np.mean(tty))
-            
+        
         w = 1./(xe**2+0.02**2)
         A=np.zeros((3,3))
         B=np.zeros((3))
@@ -196,7 +199,7 @@ if True :
 
         print(cam,"tx={}+{}*x+{}*y".format(T[cam]["x"][0],T[cam]["x"][1],T[cam]["x"][2]))
         print(cam,"ty={}+{}*x+{}*y".format(T[cam]["y"][0],T[cam]["y"][1],T[cam]["y"][2]))
-
+        
 
 
         if 0 :
@@ -215,9 +218,9 @@ if True :
         p = T[cam]["y"]
         cty0[cam] =  p[0]+p[1]*x+p[2]*y
 
-        x0[cam] = x
-        y0[cam] = y
-
+        cx0[cam] = x
+        cy0[cam] = y
+        flux0[cam] =cat['aper_sum_bkgsub_3'][ii]
         
 
 
@@ -244,19 +247,20 @@ for filename in args.infile :
         
     angles_of_cams = []
     errors_of_cams = []
-    
-    errmax=0.2
-    
-    #NAXIS1  =                 3072
-    #NAXIS2  =                 2048
+    x0_of_cams = []
+    y0_of_cams = []
+    xc_of_cams = []
+    yc_of_cams = []
+    dx_of_cams = []
+    dy_of_cams = []
+    cam_of_cams = []
     
     for cam in cameras :
-        ii=(cat['camera']==cam)&(cat['dxcentroid']>0)&(cat['dycentroid']>0)&(cat['dxcentroid']<errmax)&(cat['dycentroid']<errmax)&(cat['sig_major_pix']>2)&(cat['sig_minor_pix']>1)
+        
+        ii=(cat['camera']==cam)&(cat['dxcentroid']>0)&(cat['dycentroid']>0)&(cat['dxcentroid']<args.maxerr)&(cat['dycentroid']<args.maxerr)&(cat['sig_major_pix']>2)&(cat['sig_minor_pix']>1)
         
         if np.sum(ii)==0 : 
             print(cam,'no stars!')
-            angles_of_cams.append(0)
-            errors_of_cams.append(0)
             continue
         
         x=cat['xcentroid'][ii]
@@ -264,75 +268,105 @@ for filename in args.infile :
         xe=cat['dxcentroid'][ii]
         ye=cat['dycentroid'][ii]
 
-        # select stars 
-        #ms = np.median(cat['sig_major_pix'][ii])
-        #rms = 1.48*np.median(np.abs(cat['sig_major_pix'][ii]-ms))
-        #ok = 
-        #plt.figure()
-        #plt.plot(cat['sig_major_pix'][ii],"o")
-        
         p = T[cam]["x"]
         ctx  =  p[0]+p[1]*x+p[2]*y
         ctxe =  np.sqrt((p[1]*xe)**2+(p[2]*ye)**2)
         p = T[cam]["y"]
         cty  =  p[0]+p[1]*x+p[2]*y
         ctye =  np.sqrt((p[1]*xe)**2+(p[2]*ye)**2)
-        
         n0=ctx0[cam].size
         nc=ctx.size
 
-        dist2 = (np.tile(ctx,(n0,1))-np.tile(ctx0[cam],(nc,1)).T)**2 \
+        
+
+        if 1 : # use astrometry of this exposure for match
+            tx,ty = hadec2xy(reference_lst - cat['ra'][ii],cat['dec'][ii],reference_ha,reference_dec)
+
+            k=np.argsort(flux0[cam])[::-1]
+            n0=nc+3
+            ktx0=ctx0[cam][k][:n0]
+            kty0=cty0[cam][k][:n0]
+            n0=ktx0.size
+
+            dx=0.
+            dy=0.
+            for loop in range(3) :
+                dist2 = (np.tile(tx,(n0,1))-np.tile(ktx0-dx,(nc,1)).T)**2 \
+                        + (np.tile(ty,(n0,1))-np.tile(kty0-dy,(nc,1)).T)**2
+                j = np.argmin(dist2,axis=0)
+                dx = np.median(ktx0[j]-tx)
+                dy = np.median(kty0[j]-ty)
+                
+                mctx0=ktx0[j]
+                mcty0=kty0[j]
+                        
+            dist = np.sqrt((tx-(mctx0-dx))**2+(ty-(mcty0-dy))**2)
+            mx0=cx0[cam][j]
+            my0=cy0[cam][j]
+            # selection on distance of match and avoid edges of CCD
+            margin=1
+            ok = np.where((dist<args.maxdist/3600.)&(mx0>margin)&(mx0<(3072-margin))&(my0>margin)&(my0<(2048-margin)))[0]
+            print(cam,"number of matched stars=",ok.size)
+            
+            if False :
+                plt.plot(ctx0[cam],cty0[cam],"o",c="b",alpha=0.2)
+                plt.plot(ctx0[cam][k][:n0],cty0[cam][k][:n0],"o",c="b")
+                plt.plot(tx,ty,"o",c="orange")
+                for i in ok :
+                    plt.plot([mctx0[i],tx[i]],[mcty0[i],ty[i]],"-",c="black")
+                    plt.plot([mctx0[i],ctx[i]],[mcty0[i],cty[i]],"--",c="red")
+                    
+                plt.show()
+
+        else : # use tranfo from reference exposure for the match
+            dist2 = (np.tile(ctx,(n0,1))-np.tile(ctx0[cam],(nc,1)).T)**2 \
                 + (np.tile(cty,(n0,1))-np.tile(cty0[cam],(nc,1)).T)**2
-        #print(ctx.shape)
-        #print(ctx0[cam].shape)
+            j = np.argmin(dist2,axis=0)
+            # matched coordinates
+            mctx0=ctx0[cam][j]
+            mcty0=cty0[cam][j]
+            dist = np.sqrt((ctx-mctx0)**2+(cty-mcty0)**2)
+            mx0=x0[cam][j]
+            my0=y0[cam][j]
+            # selection on distance of match and avoid edges of CCD
+            ok = np.where((dist<args.maxdist/3600.)&(mx0>10)&(mx0<(3072-10))&(my0>10)&(my0<(2048-10)))[0]
         
-        j = np.argmin(dist2,axis=0)
-        
-        # matched coordinates
-        mctx0=ctx0[cam][j]
-        mcty0=cty0[cam][j]
-        dist = np.sqrt((ctx-mctx0)**2+(cty-mcty0)**2)
-        
-        mx0=x0[cam][j]
-        my0=y0[cam][j]
-        
-        #print(np.max(mx0),np.max(my0))
-        
-        # selection on distance of match and avoid edges of CCD
-        ok = np.where((dist<args.maxdist/3600.)&(mx0>10)&(mx0<(3072-10))&(my0>10)&(my0<(2048-10)))[0]
-        
-        if ok.size==0 :
-            print(cam,"no matched star")
-            angles_of_cams.append(0)
-            errors_of_cams.append(0)
+        if ok.size<3 :
+            print(cam,"not enough matched star:",ok.size)
             continue
+        x0_of_cams.append(mctx0[ok])
+        y0_of_cams.append(mcty0[ok])
+        xc_of_cams.append(ctx[ok])
+        yc_of_cams.append(cty[ok])
+        dx_of_cams.append(np.median(ctx[ok]-mctx0[ok]))
+        dy_of_cams.append(np.median(cty[ok]-mcty0[ok]))
+        cam_of_cams.append(cam)
+
+    if len(dx_of_cams)<2 :
+        print("skip this exposure because only {} cams with enough stars".format(len(dx_of_cams)))
+        continue
+
+    # will translate before measuring angles
+    dx=np.mean(dx_of_cams)
+    dy=np.mean(dy_of_cams)
+    print("mean dx,dy of cams = ",dx,dy)
+    
+    for c,cam in enumerate(cam_of_cams) :
+        x0 = x0_of_cams[c]
+        y0 = y0_of_cams[c]
+        xc = xc_of_cams[c]-dx
+        yc = yc_of_cams[c]-dy
         
-        r0=np.sqrt(mctx0[ok]**2+mcty0[ok]**2)
-        rc=np.sqrt(ctx[ok]**2+cty[ok]**2)
-        angles = np.arcsin((cty[ok]*mctx0[ok] - ctx[ok]*mcty0[ok])/r0/rc)/D2R # deg
-        errors = np.sqrt((ctye[ok]*mctx0[ok])**2 + (ctxe[ok]*mcty0[ok])**2)/r0/rc/D2R # deg
-        if ok.size > 1 :
-            mangle = np.median(angles)
-            rms    = 1.48*np.median(np.abs(angles-mangle))
-
-            for loop in range(5) :
-                kk     = np.abs(angles-mangle)<2.5*rms
-                if loop<1 :
-                    mangle = np.median(angles[kk])
-                    rms    = 1.48*np.median(np.abs(angles[kk]-mangle))
-                else :
-                    mangle = np.mean(angles[kk])
-                    rms    = np.std(angles[kk])
-                #print(loop,mangle,rms,np.sum(kk))
-
-            err    = rms/np.sqrt(np.sum(kk)-1)
-        else :
-            mangle = angles[0]
-            rms = 0
-            err = 0.1 # made up
+        r0=np.sqrt(x0**2+y0**2)
+        rc=np.sqrt(xc**2+yc**2)
+        angles = np.arcsin((yc*x0 - xc*y0)/r0/rc)/D2R # deg
+        mangle = np.median(angles)
+        rms    = 1.48*np.median(np.abs(angles-mangle))
+        err    = 1.25*rms/np.sqrt(len(x0_of_cams)-1)
         print("{} angle = {} +- {} deg (rms={})".format(cam,mangle,err,rms))
         angles_of_cams.append(mangle)
         errors_of_cams.append(err)
+        
         if False :
             plt.figure()
             plt.plot(mctx0[ok],mcty0[ok],"o")
@@ -364,37 +398,40 @@ for filename in args.infile :
     if np.std(angles_of_cams) == 0 or np.mean(angles_of_cams) == 0 :
         print("nothing interesting for this exposure")
         continue
-
-    #print(head)
+    
+    cam_of_cams = np.array(cam_of_cams)
+    #print(cam_of_cams)
+    cc=np.where(cam_of_cams!=b'CIC')[0]
+    #print(cc)
+    #print("n outer cams=",cc.size)
+    print("outer cams=",cam_of_cams[cc])
+    
+    if cc.size<2 :
+        print("skip this exposure")
+        continue
+        
     res=[]
     for k in keys :
         res.append(head[k])
-    for c in range(4) :
-        res.append(angles_of_cams[c])
-        res.append(errors_of_cams[c])
-    ii=np.where(angles_of_cams!=0)[0]
-    if ii.size == 0 :
-        print("nothing?")
-        continue
-    mtheta=np.mean(angles_of_cams[ii])
-    mthetaerr=np.mean(errors_of_cams[ii])/np.sqrt(ii.size)
+    
+    # I don't want to do a weighted mean because I want to weight
+    # equally the cameras.
+    mtheta=np.mean(angles_of_cams[cc])
+    
+    # approximate error
+    chi2=np.sum((angles_of_cams[cc]-mtheta)**2/errors_of_cams[cc]**2)
+    rchi2=chi2/3.
+    mthetaerr=np.sqrt(np.sum(errors_of_cams[cc]**2))/cc.size
+    if rchi2>1 :
+        mthetaerr *= np.sqrt(rchi2)
     res.append(mtheta)
     res.append(mthetaerr)
-    print("#############",mtheta,mthetaerr,"############") 
+    print("angle= {:6.5f} +- {:6.5f}".format(mtheta,mthetaerr))
     results.append(res)
 
 
 results=np.array(results)
-np.savetxt(args.outfile,results,header="EXPID NIGHT TARGTRA TARGTDEC SKYRA SKYDEC MOUNTHA MOUNTAZ MOUNTEL MOUNTDEC PARALLAC THETA1 ERR1  THETA2 ERR2 THETA3 ERR3 THETA4 ERR4 THETA_DEG_EOFN_RELATIVE THETA_ERROR")
-
-
-    #plt.show()
-    #sys.exit(12)
-
-#ii=cat['camera']==cameras[0]
-#xx.append(cat['xcentroid'])
-#yy.append(cat['ycentroid'])
-
+np.savetxt(args.outfile,results,header="EXPID NIGHT TARGTRA TARGTDEC SKYRA SKYDEC MOUNTHA MOUNTAZ MOUNTEL MOUNTDEC PARALLAC THETA_DEG_EOFN_RELATIVE THETA_ERROR")
 
 plt.show()
 

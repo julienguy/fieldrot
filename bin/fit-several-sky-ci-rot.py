@@ -11,8 +11,8 @@ from fieldrot.rotlib import *
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
 description="Fit field rotation data")
-parser.add_argument('-i','--infile', type = str, default = None, required = True, 
-                    help = 'path to ASCII file with sky rotation data (like sky-ci-rotation.txt)')
+parser.add_argument('-i','--infile', type = str, nargs = "*" , default = None, required = True, 
+                    help = 'path to ASCII files with sky rotation data (like sky-ci-rotation.txt)')
 parser.add_argument('--opposite', action = 'store_true',
                     help = 'interpret rotation angle as rot of instrument wrt sky instead of sky wrt instrument, needed for Aarons angles')
 parser.add_argument('--scan', action = 'store_true',
@@ -37,23 +37,35 @@ x2d  = np.cos(tmp)
 y2d  = np.sin(tmp)
 
 
-filename=args.infile
+table=None
 
-print("loading",filename)
+for j,filename in enumerate(args.infile) :
 
-tmp=np.loadtxt(filename).T
-table={}
-for line in open(filename).readlines() :
-    if line.find("# EXPID")>=0 :
-        keys=(line.replace("#","").strip()).split()
-        break
-#print(keys)
-i=0
-for k in keys :
-    if len(k)>0 :
-        table[k]=tmp[i]
-        i+=1
+    print("loading",filename)
+
+    tmp=np.loadtxt(filename).T
+    for line in open(filename).readlines() :
+        if line.find("# EXPID")>=0 :
+            keys=(line.replace("#","").strip()).split()
+            break
+    if table is None :
+        table={}
+        i=0
+        for k in keys :
+            if len(k)>0 :
+                table[k]=tmp[i]
+                i+=1
+        table["fileid"]=j*np.ones(tmp.shape[1])
+    else :
+        i=0
+        for k in keys :
+            if len(k)>0 :
+                table[k]=np.append(table[k],tmp[i])
+                i+=1
+        table["fileid"]=np.append(table["fileid"],j*np.ones(tmp.shape[1]))
+
 print(table.keys())
+fileids = np.unique(table["fileid"])
 
 
 #for i in range(table["HEXPOS1"].size) :
@@ -181,10 +193,16 @@ for sample,ii in enumerate(configs ) :
     boresight_offset_dx = -0.021 # deg , real one is indeed -0.013
     boresight_offset_dy = 0. # deg
     
-    # best is
+    # best is for external rotation
     if 0 :
         telescope_polar_axis_dha = 10.  ;  telescope_polar_axis_ddec = 0.032 # degrees
         boresight_offset_dx = -0.013 # deg
+        boresight_offset_dy = 0.0 # deg
+
+    # best is for internal rotation
+    if 0 :
+        telescope_polar_axis_dha = 21.  ;  telescope_polar_axis_ddec = 0.028 # degrees
+        boresight_offset_dx = 0.0 # deg
         boresight_offset_dy = 0.0 # deg
     
     scale=1
@@ -208,9 +226,9 @@ for sample,ii in enumerate(configs ) :
 
         #bsdxs=np.linspace(-0.08,0.,81)
         #bsdys=np.linspace(-0.04,0.04,41)        
-        #thas=np.linspace(0,360,37)
-        #tdecs=np.linspace(0.02,0.04,21)
-        scales=np.linspace(0,1.5,16)
+        thas=np.linspace(20,40,21)
+        tdecs=np.linspace(0.02,0.04,21)
+        #scales=np.linspace(0,1.5,16)
         
     else :
         thas=[telescope_polar_axis_dha]
@@ -326,7 +344,12 @@ for sample,ii in enumerate(configs ) :
 
                         rms0 = np.std(z-ptheta)
                         if fit_offset :
-                            delta = np.sum(w*(z-ptheta-model))/np.sum(w)
+                            delta = np.zeros(z.size)
+                            for fid in fileids :
+                                jj=np.where(table["fileid"][ii]==fid)[0]
+                                d = np.sum(w[jj]*(z[jj]-ptheta[jj]-model[jj]))/np.sum(w[jj])
+                                delta[jj]=d
+                                #print(jj.size,"delta=",delta[jj])
                         rms  = np.std(z-ptheta-model)
                         chi2  = np.sum(w*(z-ptheta-model-delta)**2)/w.size
                         print(tha,tdec,"rms(ptheta):",np.std(ptheta),"rms(res):",rms0,"->",rms)
@@ -431,81 +454,45 @@ for sample,ii in enumerate(configs ) :
     if conversion == 1: unit="deg"
     elif conversion == 3600: unit="arcsec"
     
-    night=int(np.median(table["NIGHT"][ii]))
-    emin=int(np.min(table["EXPID"][ii]))
-    emax=int(np.max(table["EXPID"][ii]))    
-    label  = "{} expid {}-{}".format(night,emin,emax)
-    if args.fit_offset :
-        offset = np.mean(z-ptheta)
-        print("offset=",offset)
-        label  += " + offset"
-    else :
-        offset = 0.
+    
     if 1 : # vs HA
-        title=filename.split(".")[0]+"-vs-ha"
+        title="field-rotation-vs-ha"
         fig=plt.figure(title)
-
-        
-        
-        plt.scatter(table["MOUNTHA"][ii],(z-offset)*conversion,label=label,alpha=0.8)
-        plt.plot(table["MOUNTHA"][ii],ptheta1*conversion,mstyle,c="red",label="polar misalignment + refraction")
-        if args.with_boresight_offset :
-            plt.plot(table["MOUNTHA"][ii],ptheta*conversion,"v",c="green",label="polar misalignment + refraction + boresight offset")
-        if args.fit_torque or args.fixed_torque :
-            #plt.plot(table["MOUNTHA"][ii],model,"-",label="FP torque")
-            label="polar misalignment + refraction + FP torque"
-            label+=" (a={:4.3f} b={:4.3f} deg)".format(a,b)
-            plt.plot(table["MOUNTHA"][ii],(ptheta+model-offset)*conversion,mstyle,c='orange',label=label)
+        first=True
+        offset = np.zeros(z.size)
+        for fid in fileids :
+            jj=np.where(table["fileid"][ii]==int(fid))[0]
+            night=int(np.median(table["NIGHT"][ii][jj]))
+            dec=int(np.median(table["TARGTDEC"][ii][jj]))
+            emin=int(np.min(table["EXPID"][ii][jj]))
+            emax=int(np.max(table["EXPID"][ii][jj]))    
+            label  = "{} expid {}-{} Dec={:2.1f}".format(night,emin,emax,dec)
+            if args.fit_offset :
+                offset[jj] = np.mean(z[jj]-ptheta[jj])
+                print("file #{} offset={}".format(fid,np.mean(offset[jj])))
+                label  += " + offset"
+            
+            plt.scatter(table["MOUNTHA"][ii][jj],(z[jj]-offset[jj])*conversion,label=label,alpha=0.8)
+            mlabel=None
+            if first :
+                mlabel="polar misalignment + refraction"
+            plt.plot(table["MOUNTHA"][ii][jj],ptheta1[jj]*conversion,mstyle,c="red",label=mlabel)
+            if args.with_boresight_offset :
+                if first :
+                    mlabel="polar misalignment + refraction + boresight offset"
+                plt.plot(table["MOUNTHA"][ii][jj],ptheta[jj]*conversion[jj],mstyle,c="green",label=mlabel)
+                if args.fit_torque or args.fixed_torque :
+                    #plt.plot(table["MOUNTHA"][ii],model,"-",label="FP torque")
+                    if first :
+                        mlabel="polar misalignment + refraction + FP torque"
+                        mlabel+=" (a={:4.3f} b={:4.3f} deg)".format(a,b)
+                    plt.plot(table["MOUNTHA"][ii][jj],(ptheta[jj]+model[jj]-offset[jj])*conversion,mstyle,c='orange',label=mlabel)
+            first=False
         legend_title='with ME={:d}" MA={:d}"'.format(int(me),int(ma))
         #if args.fit_torque or args.fixed_torque : legend_title+=" a={:4.3f} b={:4.3f} deg".format(a,b)
         plt.legend(title=legend_title)
         plt.xlabel("HA (deg)")
-        if offset :
-            plt.ylabel("measured rotation angle on sky + offset ({})".format(unit))
-        else :
-            plt.ylabel("measured rotation angle on sky ({})".format(unit))
-        plt.grid()
-        fig.savefig(title+".png")
-        print("wrote",title+".png")
-
-
-    if 1 : # vs EXPID
-        title=filename.split(".")[0]+"-vs-expid"
-        fig=plt.figure(title)
-
-        
-        
-        plt.scatter(table["EXPID"][ii],(z-offset)*conversion,label=label,alpha=0.8)
-        plt.plot(table["EXPID"][ii],ptheta1*conversion,mstyle,c="red",label="polar misalignment + refraction")
-        if args.with_boresight_offset :
-            plt.plot(table["EXPID"][ii],ptheta*conversion,"v",c="green",label="polar misalignment + refraction + boresight offset")
-        if args.fit_torque or args.fixed_torque :
-            #plt.plot(table["EXPID"][ii],model,"-",label="FP torque")
-            label="polar misalignment + refraction + FP torque"
-            label+=" (a={:4.3f} b={:4.3f} deg)".format(a,b)
-            plt.plot(table["EXPID"][ii],(ptheta+model-offset)*conversion,mstyle,c='orange',label=label)
-        legend_title='with ME={:d}" MA={:d}"'.format(int(me),int(ma))
-        #if args.fit_torque or args.fixed_torque : legend_title+=" a={:4.3f} b={:4.3f} deg".format(a,b)
-        plt.legend(title=legend_title)
-        plt.xlabel("EXPID")
-        if offset :
-            plt.ylabel("measured rotation angle on sky + offset ({})".format(unit))
-        else :
-            plt.ylabel("measured rotation angle on sky ({})".format(unit))
-        plt.grid()
-        fig.savefig(title+".png")
-        print("wrote",title+".png")
-
-    if 0 : # vs dec
-        title=filename.split(".")[0]+"-vs-dec"
-        fig=plt.figure(title)
-        plt.scatter(table["MOUNTDEC"][ii],z-offset,label=label)
-        plt.plot(table["MOUNTDEC"][ii],ptheta,mstyle,c="red",label="polar misalignment + refraction")
-        if args.fit_torque or args.fixed_torque :
-            plt.plot(table["MOUNTDEC"][ii],ptheta+model,mstyle,c='orange',label="polar misalignment + refraction + FP torque")
-        plt.legend()
-        plt.xlabel("DEC (deg)")
-        if offset :
+        if args.fit_offset :
             plt.ylabel("measured rotation angle on sky + offset ({})".format(unit))
         else :
             plt.ylabel("measured rotation angle on sky ({})".format(unit))
@@ -513,21 +500,5 @@ for sample,ii in enumerate(configs ) :
         fig.savefig(title+".png")
         print("wrote",title+".png")
         
-    if 0 : # vs alt
-        title=filename.split(".")[0]+"-vs-el"
-        fig=plt.figure(title)
-        plt.scatter(table["MOUNTEL"][ii],z-offset,label=label)
-        plt.plot(table["MOUNTEL"][ii],ptheta,mstyle,c="red",label="polar misalignment + refraction")
-        if args.fit_torque or args.fixed_torque :
-            plt.plot(table["MOUNTEL"][ii],ptheta+model,mstyle,c='orange',label="polar misalignment + refraction + FP torque")
-        plt.legend()
-        plt.xlabel("ELEVATION (deg)")
-        if offset :
-            plt.ylabel("measured rotation angle on sky + offset ({})".format(unit))
-        else :
-            plt.ylabel("measured rotation angle on sky ({})".format(unit))
-        plt.grid()
-        fig.savefig(title+".png")
-        print("wrote",title+".png")
         
 plt.show()
